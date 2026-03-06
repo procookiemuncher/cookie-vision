@@ -1,7 +1,6 @@
 // ============================================================
 //  AI SOLVER — STEALTH MODE
 //  Paste into browser console OR save as a bookmarklet
-//  Replace YOUR_GEMINI_API_KEY with your actual key
 //
 //  CONTROLS:
 //  Alt+S → Solve current page
@@ -13,7 +12,7 @@
 
 (function () {
 
-  const GEMINI_API_KEY = "AIzaSyCghXbUMN0zmsfYefdrY89YLv6xnRFSYaI";
+  const WORKER_URL = "https://cookie-vision.thegoatcodercookie.workers.dev";
   const WIDGET_ID = "__ss_widget__";
   const AUTO_HIDE_MS = 15000;
 
@@ -166,63 +165,42 @@
     const seen = new Set(), chunks = [];
     tags.forEach(tag => {
       document.querySelectorAll(tag).forEach(el => {
-        const t = el.innerText?.trim();
+        const t = el.innerText?.trim().replace(/\s+/g, " ");
         if (t && t.length > 8 && !seen.has(t)) { seen.add(t); chunks.push(t); }
       });
     });
-    return chunks.join("\n").slice(0, 6000);
+
+    // Deduplicate lines aggressively
+    const lines = chunks.join("\n").split("\n");
+    const seenLines = new Set();
+    const cleaned = [];
+    for (const line of lines) {
+      const normalized = line.trim().toLowerCase();
+      if (normalized && !seenLines.has(normalized)) {
+        seenLines.add(normalized);
+        cleaned.push(line.trim());
+      }
+    }
+
+    return cleaned.join("\n").slice(0, 4000);
   }
 
-  // ── Gemini API ────────────────────────────────────────────
-  async function solveWithGemini(pageText) {
-    const prompt = `You are an expert tutor. Find and answer any questions in the page text below.
+  // ── Worker API ────────────────────────────────────────────
+  async function solveWithWorker(pageText) {
+    const res = await fetch(`${WORKER_URL}/solve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageText })
+    });
 
-PRECISION:
-- Never round or truncate any intermediate value, keep all decimal places until the final step
-- For e^x: use at least 10 decimal places
-- For (1 + r/n)^(nt): always compute using e^(nt x ln(1 + r/n)) for maximum precision
-- Double-check all exponent calculations step by step
-- When rounding the final answer, round to the closest value (up OR down, whichever is nearer)
-
-FORMAT:
-- Start response directly with ANSWER: — no intro text or preamble ever
-- If page text is corrupted or has repeated characters, respond with: "ANSWER: Could not read page clearly."
-- Use LaTeX math notation for ALL equations, wrapped in $...$
-- Format EVERY response EXACTLY like this (each on its own line, nothing else):
-
-ANSWER: [final answer]
-STEP: [formula in LaTeX]
-STEP: [plug in numbers in LaTeX]
-STEP: [simplify in LaTeX]
-STEP: [simplify further in LaTeX]
-STEP: [final calculation in LaTeX]
-STEP: [rounded answer]
-
-- Each STEP line shows ONE small change from the previous step
-- No labels, no extra words, no blank lines — just ANSWER: and STEP: lines
-- For written subjects: each STEP is one short sentence, no LaTeX needed
-- Extract questions only, ignore all navigation, ads, and irrelevant page content
-
-PAGE TEXT:
-${pageText}`;
-
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 4096 }
-        })
-      }
-    );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+      throw new Error(err?.error || `HTTP ${res.status}`);
     }
+
     const data = await res.json();
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (data.error) throw new Error(data.error);
+    return data.result;
   }
 
   // ── Parse response ────────────────────────────────────────
@@ -239,7 +217,6 @@ ${pageText}`;
 
   // ── Solve ─────────────────────────────────────────────────
   async function runSolve() {
-    // Force visible immediately
     root.style.setProperty("opacity", "1", "important");
     visible = true;
     elStep.style.color = "rgba(0,0,0,1)";
@@ -253,7 +230,7 @@ ${pageText}`;
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no text found</span>`;
         return;
       }
-      const raw = await solveWithGemini(pageText);
+      const raw = await solveWithWorker(pageText);
       const parsed = parseResponse(raw);
       if (!parsed.answer && !parsed.steps.length) {
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no answer found</span>`;
@@ -265,7 +242,6 @@ ${pageText}`;
       ];
       currentStep = 0;
       await renderStep();
-      // Make sure still visible after render
       root.style.setProperty("opacity", "1", "important");
       clearTimeout(autoHideTimer);
       autoHideTimer = setTimeout(hide, AUTO_HIDE_MS);
