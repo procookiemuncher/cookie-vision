@@ -1,5 +1,5 @@
 // ============================================================
-//  AI SOLVER — STEALTH MODE
+//  AI SOLVER FOR TUTORING.ORG
 //  Paste into browser console OR save as a bookmarklet
 //
 //  CONTROLS:
@@ -7,7 +7,7 @@
 //  Alt+N → Next step
 //  Alt+B → Back a step
 //  Alt+V → Toggle show/hide
-//  Alt+H → Panic hide (instant wipe)
+//  Alt+H → toggle show/hide
 // ============================================================
 
 (function () {
@@ -29,6 +29,84 @@
     mj.async = true;
     document.head.appendChild(mj);
   }
+
+  // ── Subject Detection ──────────────────────────────────────
+  const subjectKeywords = {
+    Math: [
+      /solv/i, /equation/i, /calculat/i, /find\s*x/i, /derivative/i, /graph/i,
+      /integra/i, /factor/i, /simplif/i, /polynomial/i, /quadratic/i, /slope/i,
+      /intercept/i, /exponent/i, /logarithm/i, /fraction/i, /inequalit/i,
+      /trigonometr/i, /sine|cosine|tangent/i, /algebra/i, /geometry/i,
+      /[+\-*/=<>]{2,}/, /\d+\s*[+\-*/^]\s*\d+/, /\bx\s*[=+\-*/^]\s*\d/i
+    ],
+    English: [
+      /\bessay/i, /\banalyz/i, /\btheme/i, /\bcharacter/i, /\bargument/i,
+      /\bquote/i, /\bdiscuss/i, /\bliterar/i, /\bmetaphor/i, /\bsymbol/i,
+      /\bnarrat/i, /\bauthor/i, /\bpoem/i, /\brheto/i, /\bthesis/i,
+      /\btone/i, /\bperspective/i, /\bpassage/i, /\bcontext\s*clue/i,
+      /\bvocabulary/i, /\bgrammar/i, /\bsentence/i, /\bparagraph/i
+    ],
+    History: [
+      /\bwar\b/i, /\brevolution/i, /\bpresident/i, /\btreaty/i, /\bciviliz/i,
+      /\bcoloni/i, /\bempire/i, /\bamendment/i, /\bconstitution/i, /\bindependence/i,
+      /\bcivil\s*rights/i, /\bcold\s*war/i, /\bworld\s*war/i, /\b\d{4}\s*(ad|bc|ce|bce)/i,
+      /\bhistor/i, /\bancient/i, /\bmedieval/i, /\bdemocra/i, /\bmonarch/i
+    ],
+    Science: [
+      /\breaction/i, /\batom/i, /\bDNA\b/i, /\bphotosynthe/i, /\bforce\b/i,
+      /\benergy/i, /\bcell\b/i, /\bmolecul/i, /\belement/i, /\bchemic/i,
+      /\bphysic/i, /\bbiolog/i, /\becosystem/i, /\bgravit/i, /\bveloci/i,
+      /\bgenetic/i, /\bevolution/i, /\borganism/i, /\bhypothes/i, /\bexperiment/i
+    ]
+  };
+
+  function detectSubject(pageText) {
+    const scores = { Math: 0, English: 0, History: 0, Science: 0 };
+    for (const [subject, patterns] of Object.entries(subjectKeywords)) {
+      for (const pat of patterns) {
+        const matches = pageText.match(new RegExp(pat, 'gi'));
+        if (matches) scores[subject] += matches.length;
+      }
+    }
+    let best = "Default", bestScore = 0;
+    for (const [subject, score] of Object.entries(scores)) {
+      if (score > bestScore) { bestScore = score; best = subject; }
+    }
+    return bestScore >= 2 ? best : "Default";
+  }
+
+  // ── Prompts Config ─────────────────────────────────────────
+  const promptsConfig = {
+    Math: `You are a math tutor. Find and solve the question.
+ANSWER: [final answer]
+STEP: [formula]
+STEP: [plug in numbers]
+STEP: [simplify]
+STEP: [final result]
+Be precise. No fluff.`,
+    English: `You are an English teacher. Answer the question.
+ANSWER: [main thesis/answer]
+STEP: [evidence or reasoning 1]
+STEP: [evidence or reasoning 2]
+STEP: [conclusion]
+Be concise.`,
+    History: `You are a history expert. Answer the question.
+ANSWER: [fact/date/answer]
+STEP: [historical context]
+STEP: [why it matters]
+STEP: [related events]
+Be factual.`,
+    Science: `You are a science tutor. Answer the question.
+ANSWER: [concept/answer]
+STEP: [explanation 1]
+STEP: [explanation 2]
+STEP: [real-world example]
+Be clear.`,
+    Default: `Answer the question clearly.
+ANSWER: [answer]
+STEP: [reasoning 1]
+STEP: [reasoning 2]`
+  };
 
   // ── Styles ───────────────────────────────────────────────
   const style = document.createElement("style");
@@ -170,7 +248,6 @@
       });
     });
 
-    // Deduplicate lines aggressively
     const lines = chunks.join("\n").split("\n");
     const seenLines = new Set();
     const cleaned = [];
@@ -187,10 +264,13 @@
 
   // ── Worker API ────────────────────────────────────────────
   async function solveWithWorker(pageText) {
+    const subject = detectSubject(pageText);
+    const prompt = promptsConfig[subject];
+
     const res = await fetch(`${WORKER_URL}/solve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageText })
+      body: JSON.stringify({ pageText, subject, prompt })
     });
 
     if (!res.ok) {
@@ -259,7 +339,7 @@
     if (k === "n") { e.preventDefault(); nextStep(); }
     if (k === "b") { e.preventDefault(); prevStep(); }
     if (k === "v") { e.preventDefault(); toggleVisible(); }
-    if (k === "h") { e.preventDefault(); panicHide(); }
+    if (k === "h") { e.preventDefault(); toggleVisible(); }
   });
 
 })();
