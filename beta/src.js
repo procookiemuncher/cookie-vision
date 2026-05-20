@@ -316,4 +316,114 @@ STEP: [reasoning 2]`
       }
     }
     // No usable iframe content — fall back to outer page
-    return scrapeDoc(
+    return scrapeDoc(document);
+  }
+
+  // ── Worker API ────────────────────────────────────────────
+  async function solveWithWorker(pageText) {
+    const subject = detectSubject(pageText);
+    const prompt = promptsConfig[subject];
+
+    const res = await fetch(`${WORKER_URL}/solve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageText, subject, prompt })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return { result: data.result, subject };
+  }
+
+  // ── Parse response (FIX 2: robust case-insensitive parsing) ──
+  function parseResponse(text) {
+    // Strip markdown bold markers the AI sometimes adds
+    const cleaned = text.replace(/\*\*/g, "").replace(/__/g, "");
+    const lines = cleaned.split("\n").map(l => l.trim()).filter(Boolean);
+    let answer = "";
+    const parsedSteps = [];
+
+    for (const line of lines) {
+      // Case-insensitive, tolerates space before colon: "Answer : foo"
+      const answerMatch = line.match(/^answer\s*:\s*/i);
+      const stepMatch   = line.match(/^step\s*\d*\s*:\s*/i);
+      if (answerMatch)    answer = line.slice(answerMatch[0].length).trim();
+      else if (stepMatch) parsedSteps.push(line.slice(stepMatch[0].length).trim());
+    }
+
+    return { answer, steps: parsedSteps };
+  }
+
+  // ── Format answer for subject (FIX 1: no math wrapping for non-math) ──
+  function formatAnswer(answer, subject) {
+    const tag = `<span style="font-size:8px;color:rgba(0,0,0,0.35);display:block;text-align:right;letter-spacing:0.08em;font-family:monospace">ans</span>`;
+    if (subject === "Math") {
+      // Strip any $ the AI already added to avoid double-wrapping ($$answer$$)
+      const clean = answer.replace(/^\$+|\$+$/g, "").trim();
+      return `${tag}$${clean}$`;
+    }
+    return `${tag}${escapeHtml(answer)}`;
+  }
+
+  // ── Solve ─────────────────────────────────────────────────
+  async function runSolve() {
+    // FIX 3: prevent concurrent solves
+    if (solving) return;
+    solving = true;
+
+    root.style.setProperty("opacity", "1", "important");
+    visible = true;
+    elStep.style.color = "rgba(0,0,0,1)";
+    showStatus("solving…");
+    elCounter.textContent = "";
+    steps = []; currentStep = 0;
+
+    try {
+      let pageText = getPageText();
+      // Retry once if content is too short — iframe may still be loading
+      if (!pageText || pageText.length < 80) {
+        await new Promise(r => setTimeout(r, 900));
+        pageText = getPageText();
+      }
+      if (!pageText || pageText.length < 20) {
+        showStatus("no text found");
+        return;
+      }
+      const { result: raw, subject } = await solveWithWorker(pageText);
+      const parsed = parseResponse(raw);
+      if (!parsed.answer && !parsed.steps.length) {
+        showStatus("no answer found");
+        return;
+      }
+      steps = [
+        formatAnswer(parsed.answer, subject), // FIX 1
+        ...parsed.steps.map(s => escapeHtml(s)) // FIX 7: escape step text too
+      ];
+      currentStep = 0;
+      await renderStep(); // FIX 6: renderStep owns the auto-hide timer, not runSolve
+      root.style.setProperty("opacity", "1", "important");
+    } catch (e) {
+      showStatus(`err: ${e.message.slice(0, 60)}`); // FIX 7: escaped via showStatus
+      elCounter.textContent = "";
+    } finally {
+      solving = false; // FIX 3: always release the lock
+    }
+  }
+
+  // ── Keys ──────────────────────────────────────────────────
+  document.addEventListener("keydown", (e) => {
+    if (!e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === "s") { e.preventDefault(); runSolve(); }
+    if (k === "n") { e.preventDefault(); nextStep(); }
+    if (k === "b") { e.preventDefault(); prevStep(); }
+    if (k === "v") { e.preventDefault(); toggleVisible(); }
+    if (k === "h") { e.preventDefault(); toggleVisible(); }
+  });
+
+})();
