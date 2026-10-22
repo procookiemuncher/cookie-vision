@@ -2,7 +2,7 @@
 //  AI SOLVER FOR TUTORING.ORG — BETA
 //  Paste into browser console OR save as a bookmarklet
 //
-//  CONTROLS:
+//  CONTROLS (use Option instead of Alt on Mac):
 //  Alt+S → Solve current page
 //  Alt+N → Next step
 //  Alt+B → Back a step
@@ -418,12 +418,13 @@ STEP: [reasoning 2]`
   // ── Keys ──────────────────────────────────────────────────
   document.addEventListener("keydown", (e) => {
     if (!e.altKey) return;
-    const k = e.key.toLowerCase();
-    if (k === "s") { e.preventDefault(); runSolve(); }
-    if (k === "n") { e.preventDefault(); nextStep(); }
-    if (k === "b") { e.preventDefault(); prevStep(); }
-    if (k === "v") { e.preventDefault(); toggleVisible(); }
-    if (k === "h") { e.preventDefault(); toggleVisible(); }
+    // Use e.code (physical key) — on Mac, Option+S gives e.key "ß"
+    const k = e.code;
+    if (k === "KeyS") { e.preventDefault(); runSolve(); }
+    if (k === "KeyN") { e.preventDefault(); nextStep(); }
+    if (k === "KeyB") { e.preventDefault(); prevStep(); }
+    if (k === "KeyV") { e.preventDefault(); toggleVisible(); }
+    if (k === "KeyH") { e.preventDefault(); toggleVisible(); }
   });
 
 })();
