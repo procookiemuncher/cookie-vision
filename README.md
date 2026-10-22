@@ -1,5 +1,5 @@
 # cookie-vision
-Universal Cheating (La Révolution)
+(La Révolution)
 
 ## Bookmarklet (auto-updating)
 
