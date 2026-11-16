@@ -55,7 +55,7 @@ export default {
       return new Response("Invalid JSON", { status: 400 });
     }
 
-    const { pageText, images } = body;
+    const { pageText, images, mode } = body;
 
     if (!pageText || pageText.length < 20) {
       return json({ error: "No page text provided" }, 400);
@@ -67,7 +67,7 @@ export default {
 
     const imageParts = (await Promise.all((Array.isArray(images) ? images : []).slice(0, 4).map(imagePart))).filter(Boolean);
 
-    const fullPrompt = `You are an expert tutor. Find and answer any questions in the page text below.
+    const solvePrompt = `You are an expert tutor. Find and answer any questions in the page text below.
 ${imageParts.length ? "\nImages of the charts/figures on the page are attached. Read values, labels and shapes from them; they are part of the question.\n" : ""}
 PRECISION:
 - Never round or truncate any intermediate value, keep all decimal places until the final step
@@ -99,6 +99,18 @@ STEP: [rounded answer]
 PAGE TEXT:
 ${pageText}`;
 
+    // multiple choice only needs the letter, so skip the long worked solution
+    const choicePrompt = `You are an expert tutor. Pick the single correct option from OPTIONS for the question below.${imageParts.length ? " Attached images are part of the question." : ""}
+Reply with exactly two lines and nothing else:
+CHOICE: [letter only]
+STEP: [one-line reason]
+
+PAGE TEXT:
+${pageText}`;
+
+    const isChoice = mode === "choice";
+    const fullPrompt = isChoice ? choicePrompt : solvePrompt;
+
     try {
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`,
@@ -107,7 +119,7 @@ ${pageText}`;
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: fullPrompt }, ...imageParts] }],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+            generationConfig: { temperature: 0.2, maxOutputTokens: isChoice ? 1024 : 4096 },
           }),
         }
       );

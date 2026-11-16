@@ -321,14 +321,10 @@ STEP: [reasoning 2]`
       })
       .filter(c => c.area > 0 && c.w >= MIN_W && c.h >= MIN_H)
       .sort((a, b) => b.area - a.area);
-    const out = [];
-    for (const c of candidates) {
-      if (out.length >= MAX_IMAGES) break;
-      try {
-        const url = await elementToDataUrl(c.el);
-        if (url) out.push(url);
-      } catch (e) { console.log("[ss] image skipped", c.el.tagName, e); }
-    }
+    const out = (await Promise.all(candidates.slice(0, MAX_IMAGES).map(async c => {
+      try { return await elementToDataUrl(c.el); }
+      catch (e) { console.log("[ss] image skipped", c.el.tagName, e); return null; }
+    }))).filter(Boolean);
     console.log("[ss] images", out.length);
     return out;
   }
@@ -342,7 +338,7 @@ STEP: [reasoning 2]`
     const res = await fetch(`${WORKER_URL}/solve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageText, subject, prompt, images })
+      body: JSON.stringify({ pageText, subject, prompt, images, mode: promptOverride === mcqPrompt ? "choice" : "solve" })
     });
 
     if (!res.ok) {
