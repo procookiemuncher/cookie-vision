@@ -3,7 +3,8 @@
 //  Paste into browser console OR save as a bookmarklet
 //
 //  CONTROLS:
-//  Alt+S → Solve current page (multiple choice: dash next to the correct letter)
+//  Alt+P → Snapshot this page as context (repeat for multi-part questions)
+//  Alt+S → Solve current page, plus any snapshots (multiple choice: dash next to the correct letter)
 //  Alt+N → Next step
 //  Alt+B → Back a step
 //  Alt+V → Toggle show/hide
@@ -274,7 +275,7 @@ STEP: [reasoning 2]`
   }
 
   // ── Chart / image capture ─────────────────────────────────
-  const MAX_IMAGES = 4, MAX_SIDE = 1024, MIN_W = 80, MIN_H = 60;
+  const MAX_TOTAL_IMAGES = 8, MAX_IMAGES = 4, MAX_SIDE = 1024, MIN_W = 80, MIN_H = 60;
 
   function drawToDataUrl(source, w, h) {
     const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
@@ -336,8 +337,8 @@ STEP: [reasoning 2]`
   }
 
   // ── Worker API ────────────────────────────────────────────
-  async function solveWithWorker(pageText, promptOverride) {
-    const images = await getPageImages();
+  async function solveWithWorker(pageText, promptOverride, snapshotImages = []) {
+    const images = [...snapshotImages, ...await getPageImages()].slice(-MAX_TOTAL_IMAGES);
     const subject = detectSubject(pageText);
     const prompt = promptOverride || promptsConfig[subject];
 
@@ -537,9 +538,9 @@ Be precise.`;
     markDocs.forEach(d => d.addEventListener("pointerdown", clearChoiceMarks, true));
   }
 
-  async function runChoiceSolve(choices, pageText) {
+  async function runChoiceSolve(choices, pageText, snapshotImages) {
     const optionList = choices.map(c => `${c.letter}. ${c.text}`).join("\n");
-    const raw = await solveWithWorker(`${pageText}\n\nOPTIONS:\n${optionList}`, mcqPrompt);
+    const raw = await solveWithWorker(`${pageText}\n\nOPTIONS:\n${optionList}`, mcqPrompt, snapshotImages);
     console.log("[ss] options", choices.map(c => c.letter + ": " + c.text), "reply", raw);
     const letter = (raw.match(/CHOICE:\s*\(?([A-Ha-h])\b/) || raw.match(/ANSWER:\s*\(?([A-Ha-h])\b/))?.[1]?.toUpperCase();
     const answerText = raw.match(/ANSWER:\s*(.+)/)?.[1]?.toLowerCase();
@@ -553,6 +554,38 @@ Be precise.`;
     return true;
   }
 
+  // ── Snapshots (multi-part questions) ──────────────────────
+  // Alt+P stores the current page; the next Alt+S solves with all of them as context
+  let snapshots = [];
+
+  async function takeSnapshot() {
+    setBusy(true);
+    try {
+      snapshots.push({ text: getPageText(), images: await getPageImages() });
+      console.log("[ss] snapshot", snapshots.length);
+    } finally { setBusy(false); }
+    // two quick blinks confirm the capture
+    for (let i = 0; i < 2; i++) {
+      setBusy(true); await new Promise(r => setTimeout(r, 150));
+      setBusy(false); await new Promise(r => setTimeout(r, 150));
+    }
+  }
+
+  function takeSnapshots() {
+    const taken = snapshots;
+    snapshots = [];
+    if (!taken.length) return { text: "", images: [] };
+    const seen = new Set();
+    const parts = taken.map((snap, i) => {
+      const lines = snap.text.split("\n").filter(l => !seen.has(l.toLowerCase()) && seen.add(l.toLowerCase()));
+      return `EARLIER PART ${i + 1}:\n${lines.join("\n")}`;
+    });
+    return {
+      text: `${parts.join("\n\n")}\n\nCURRENT PART (answer this one, using the earlier parts as context):\n`,
+      images: taken.flatMap(s => s.images)
+    };
+  }
+
   // ── Solve ─────────────────────────────────────────────────
   async function runSolve() {
     setBusy(true);
@@ -561,12 +594,13 @@ Be precise.`;
 
   async function solveCurrentPage() {
     clearChoiceMarks();
+    const ctx = takeSnapshots();
     const choices = findChoiceGroup();
     if (!choices) console.log("[ss] no multiple choice group found");
     if (choices) {
       try {
-        const pageText = getPageText();
-        if (await runChoiceSolve(choices, pageText)) return;
+        const pageText = ctx.text + getPageText();
+        if (await runChoiceSolve(choices, pageText, ctx.images)) return;
       } catch (e) { console.log("[ss] mcq failed", e); }
     }
     root.style.setProperty("opacity", "1", "important");
@@ -577,12 +611,12 @@ Be precise.`;
     steps = []; currentStep = 0;
 
     try {
-      const pageText = getPageText();
+      const pageText = ctx.text + getPageText();
       if (!pageText || pageText.length < 20) {
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no text found</span>`;
         return;
       }
-      const raw = await solveWithWorker(pageText);
+      const raw = await solveWithWorker(pageText, undefined, ctx.images);
       const parsed = parseResponse(raw);
       if (!parsed.answer && !parsed.steps.length) {
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no answer found</span>`;
@@ -608,6 +642,7 @@ Be precise.`;
     if (!e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === "s") { e.preventDefault(); runSolve(); }
+    if (k === "p") { e.preventDefault(); takeSnapshot(); }
     if (k === "n") { e.preventDefault(); nextStep(); }
     if (k === "b") { e.preventDefault(); prevStep(); }
     if (k === "v") { e.preventDefault(); toggleVisible(); }

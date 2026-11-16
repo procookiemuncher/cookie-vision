@@ -65,9 +65,9 @@ export default {
       return json({ error: "GEMINI_API_KEY secret is not set in Cloudflare" }, 500);
     }
 
-    const imageParts = (await Promise.all((Array.isArray(images) ? images : []).slice(0, 4).map(imagePart))).filter(Boolean);
+    const imageParts = (await Promise.all((Array.isArray(images) ? images : []).slice(0, 8).map(imagePart))).filter(Boolean);
 
-    const solvePrompt = `You are an expert tutor. Find and answer any questions in the page text below.
+    const solvePrompt = `You are an expert tutor. Find and answer any questions in the page text below. If it has EARLIER PART sections, they are context from previous parts of the same problem; answer the CURRENT PART.
 ${imageParts.length ? "\nImages of the charts/figures on the page are attached. Read values, labels and shapes from them; they are part of the question.\n" : ""}
 PRECISION:
 - Never round or truncate any intermediate value, keep all decimal places until the final step
