@@ -265,15 +265,23 @@ STEP: [reasoning 2]`
   }
 
   // ── Page scraper ──────────────────────────────────────────
+  // Toolbars, menus and nav bars are noise; the question is never in them
+  const CHROME_SELECTOR = 'nav,header,footer,aside,[role="toolbar"],[role="navigation"],[role="banner"],[role="menu"],[role="menubar"],[role="contentinfo"],[class*="toolbar" i],[class*="navbar" i]';
+
   function getPageText() {
     const tags = ["h1","h2","h3","h4","p","li","td","th","label","span","div","pre","code"];
-    const seen = new Set(), chunks = [];
+    const seen = new Set(), onscreen = [], offscreen = [];
     tags.forEach(tag => {
       deepQueryAll(tag).forEach(el => {
+        if (root.contains(el) || el.closest(CHROME_SELECTOR) || !el.getClientRects().length) return;
         const t = el.innerText?.trim().replace(/\s+/g, " ");
-        if (t && t.length > 8 && !seen.has(t)) { seen.add(t); chunks.push(t); }
+        if (!t || t.length <= 8 || seen.has(t)) return;
+        seen.add(t);
+        // what the tutor can see goes first so a long page can't push the question out
+        (viewportArea(el) > 0 ? onscreen : offscreen).push(t);
       });
     });
+    const chunks = [...onscreen, ...offscreen];
 
     const lines = chunks.join("\n").split("\n");
     const seenLines = new Set();
@@ -286,7 +294,7 @@ STEP: [reasoning 2]`
       }
     }
 
-    return cleaned.join("\n").slice(0, 4000);
+    return cleaned.join("\n").slice(0, 8000);
   }
 
   // ── Chart / image capture ─────────────────────────────────
