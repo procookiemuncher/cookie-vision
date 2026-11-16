@@ -666,7 +666,8 @@ Be precise.`;
 
   // ── Keys ──────────────────────────────────────────────────
   document.addEventListener("keydown", (e) => {
-    const k = e.key.toLowerCase();
+    // use the physical key so mac option+letter (which types ß, ∂, etc) still works
+    const k = /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : e.key.toLowerCase();
     if (e.ctrlKey && !e.altKey && k === "n") { e.preventDefault(); nextStep(); return; }
     if (!e.altKey) return;
     if (k === "s") { e.preventDefault(); runSolve(); }
