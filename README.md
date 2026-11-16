@@ -8,3 +8,14 @@ Make a new bookmark and paste this as the URL. It pulls the latest `v2/obs.js` f
 ```
 javascript:(()=>{const s=document.createElement('script');s.src='https://procookiemuncher.github.io/cookie-vision/v2/obs.js?t='+Date.now();document.body.appendChild(s);})()
 ```
+
+## Shortcuts
+
+| Action | Windows | Mac |
+| --- | --- | --- |
+| Solve the page (plus any snapshots) | Alt+S | Option+S |
+| Snapshot the page for multi-part questions | Alt+P | Option+P |
+| Reveal steps / back to just the answer | Alt+H | Option+H |
+| Next step | Alt+N or Ctrl+N | Option+N or Control+N |
+| Previous step | Alt+B | Option+B |
+| Show / hide | Alt+V | Option+V |
