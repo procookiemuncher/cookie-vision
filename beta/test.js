@@ -179,6 +179,12 @@ STEP: [reasoning 2]`
   root.innerHTML = `<div id="__ss_step__"></div><div id="__ss_counter__"></div>`;
   document.body.appendChild(root);
 
+  // tiny dot in the bottom-right corner while a request is in flight
+  const busyDot = document.createElement("div");
+  busyDot.style.cssText = "position:fixed!important;right:8px!important;bottom:8px!important;width:6px!important;height:6px!important;border-radius:50%!important;background:rgba(0,0,0,0.45)!important;z-index:2147483647!important;pointer-events:none!important;display:none!important;";
+  document.body.appendChild(busyDot);
+  const setBusy = on => busyDot.style.setProperty("display", on ? "block" : "none", "important");
+
   const elStep    = document.getElementById("__ss_step__");
   const elCounter = document.getElementById("__ss_counter__");
 
@@ -497,10 +503,14 @@ Be precise.`;
   // The dash is an overlay on the top page; the site's own DOM is never touched
   let markNode = null, markTimer = null;
 
+  let markDocs = [];
+
   function clearChoiceMarks() {
     clearInterval(markTimer);
     markNode?.remove();
     markNode = null;
+    markDocs.forEach(d => d.removeEventListener("pointerdown", clearChoiceMarks, true));
+    markDocs = [];
   }
 
   function placeMark(el) {
@@ -522,6 +532,9 @@ Be precise.`;
     document.body.appendChild(markNode);
     placeMark(el);
     markTimer = setInterval(() => placeMark(el), 150);
+    // any click (top page or the option's own iframe) removes the dash
+    markDocs = [...new Set([document, el.ownerDocument])];
+    markDocs.forEach(d => d.addEventListener("pointerdown", clearChoiceMarks, true));
   }
 
   async function runChoiceSolve(choices, pageText) {
@@ -542,6 +555,11 @@ Be precise.`;
 
   // ── Solve ─────────────────────────────────────────────────
   async function runSolve() {
+    setBusy(true);
+    try { await solveCurrentPage(); } finally { setBusy(false); }
+  }
+
+  async function solveCurrentPage() {
     clearChoiceMarks();
     const choices = findChoiceGroup();
     if (!choices) console.log("[ss] no multiple choice group found");
