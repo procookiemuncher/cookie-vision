@@ -6,10 +6,25 @@ const json = (obj, status = 200) =>
     headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
   });
 
-// "data:image/png;base64,XXXX" -> Gemini inlineData part
-function imagePart(dataUrl) {
-  const m = /^data:(image\/[\w.+-]+);base64,(.+)$/.exec(dataUrl || "");
-  return m ? { inlineData: { mimeType: m[1], data: m[2] } } : null;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+// data URL or http(s) URL -> Gemini inlineData part (null if unusable)
+async function imagePart(src) {
+  const m = /^data:(image\/[\w.+-]+);base64,(.+)$/.exec(src || "");
+  if (m) return { inlineData: { mimeType: m[1], data: m[2] } };
+  if (!/^https?:\/\//i.test(src || "")) return null;
+  try {
+    const res = await fetch(src);
+    const mimeType = (res.headers.get("content-type") || "").split(";")[0];
+    if (!res.ok || !mimeType.startsWith("image/")) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_BYTES) return null;
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { inlineData: { mimeType, data: btoa(bin) } };
+  } catch {
+    return null;
+  }
 }
 
 export default {
@@ -50,7 +65,7 @@ export default {
       return json({ error: "GEMINI_API_KEY secret is not set in Cloudflare" }, 500);
     }
 
-    const imageParts = (Array.isArray(images) ? images : []).slice(0, 4).map(imagePart).filter(Boolean);
+    const imageParts = (await Promise.all((Array.isArray(images) ? images : []).slice(0, 4).map(imagePart))).filter(Boolean);
 
     const fullPrompt = `You are an expert tutor. Find and answer any questions in the page text below.
 ${imageParts.length ? "\nImages of the charts/figures on the page are attached. Read values, labels and shapes from them; they are part of the question.\n" : ""}

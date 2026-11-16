@@ -292,14 +292,10 @@ STEP: [reasoning 2]`
     if (el.tagName === "IMG") {
       if (el.src.startsWith("data:")) return el.src;
       try { return drawToDataUrl(el, w, h); } catch (_) {}
-      // cross-origin without CORS taints the canvas, so refetch the bytes instead
-      const blob = await (await fetch(el.currentSrc || el.src)).blob();
-      return await new Promise((res, rej) => {
-        const fr = new FileReader();
-        fr.onload = () => res(fr.result);
-        fr.onerror = rej;
-        fr.readAsDataURL(blob);
-      });
+      // cross-origin without CORS: the browser can't read it, so the worker fetches the URL itself
+      const src = el.currentSrc || el.src;
+      if (/^https?:/i.test(src)) return src;
+      throw new Error("unreadable image " + src.slice(0, 30));
     }
     // SVG: serialize and rasterize
     const clone = el.cloneNode(true);
@@ -326,7 +322,7 @@ STEP: [reasoning 2]`
       if (out.length >= MAX_IMAGES) break;
       try {
         const url = await elementToDataUrl(c.el);
-        if (url && url.startsWith("data:image/")) out.push(url);
+        if (url) out.push(url);
       } catch (e) { console.log("[ss] image skipped", c.el.tagName, e); }
     }
     console.log("[ss] images", out.length);
