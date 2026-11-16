@@ -196,15 +196,19 @@ STEP: [reasoning 2]`
   function hide() {
     visible = false;
     root.style.setProperty("opacity", "0", "important");
-    clearChoiceMarks();
   }
 
-  function toggleVisible() { visible ? hide() : show(); }
+  // the dash outlives the auto-hide; only the manual toggle or a new solve removes it
+  function toggleVisible() {
+    if (markNode) { clearChoiceMarks(); hide(); return; }
+    visible ? hide() : show();
+  }
 
   function clearStepsAndHide() {
     steps = []; currentStep = 0;
     elStep.innerHTML = "";
     elCounter.textContent = "";
+    clearChoiceMarks();
     hide();
   }
 
