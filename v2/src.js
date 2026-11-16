@@ -5,10 +5,10 @@
 //  CONTROLS:
 //  Alt+P → Snapshot this page as context (repeat for multi-part questions)
 //  Alt+S → Solve current page, plus any snapshots (multiple choice: dash next to the correct letter)
-//  Alt+N → Next step
+//  Alt+H → Reveal the steps (again → back to just the answer)
+//  Ctrl+N / Alt+N → Next step (once revealed)
 //  Alt+B → Back a step
 //  Alt+V → Toggle show/hide
-//  Alt+H → toggle show/hide
 // ============================================================
 
 (function () {
@@ -190,7 +190,7 @@ STEP: [reasoning 2]`
   const elCounter = document.getElementById("__ss_counter__");
 
   // ── State ─────────────────────────────────────────────────
-  let steps = [], currentStep = 0, visible = false, autoHideTimer = null;
+  let steps = [], currentStep = 0, stepsRevealed = false, visible = false, autoHideTimer = null;
 
   // ── Visibility ────────────────────────────────────────────
   function show() {
@@ -212,7 +212,7 @@ STEP: [reasoning 2]`
   }
 
   function clearStepsAndHide() {
-    steps = []; currentStep = 0;
+    steps = []; currentStep = 0; stepsRevealed = false;
     elStep.innerHTML = "";
     elCounter.textContent = "";
     clearChoiceMarks();
@@ -223,7 +223,7 @@ STEP: [reasoning 2]`
   async function renderStep() {
     if (!steps.length) return;
     elStep.innerHTML = steps[currentStep] || "";
-    elCounter.textContent = `${currentStep + 1}/${steps.length}`;
+    elCounter.textContent = stepsRevealed ? `${currentStep + 1}/${steps.length}` : "";
     if (window.MathJax?.typesetPromise) {
       await MathJax.typesetPromise([elStep]);
     } else {
@@ -235,15 +235,30 @@ STEP: [reasoning 2]`
     autoHideTimer = setTimeout(hide, AUTO_HIDE_MS);
   }
 
-  function nextStep() {
+  // Alt+H: answer only -> steps; again -> back to the answer
+  function toggleSteps() {
     if (!steps.length) return;
+    if (stepsRevealed && visible) {
+      stepsRevealed = false;
+      currentStep = 0;
+      renderStep();
+      return;
+    }
+    stepsRevealed = true;
+    currentStep = steps.length > 1 ? 1 : 0;
+    renderStep();
+    show();
+  }
+
+  function nextStep() {
+    if (!steps.length || !stepsRevealed) return;
     currentStep = (currentStep + 1) % steps.length;
     renderStep();
     if (!visible) show();
   }
 
   function prevStep() {
-    if (!steps.length) return;
+    if (!steps.length || !stepsRevealed) return;
     currentStep = (currentStep - 1 + steps.length) % steps.length;
     renderStep();
     if (!visible) show();
@@ -608,7 +623,7 @@ Be precise.`;
     elStep.style.color = "rgba(0,0,0,1)";
     elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">solving…</span>`;
     elCounter.textContent = "";
-    steps = []; currentStep = 0;
+    steps = []; currentStep = 0; stepsRevealed = false;
 
     try {
       const pageText = ctx.text + getPageText();
@@ -639,14 +654,15 @@ Be precise.`;
 
   // ── Keys ──────────────────────────────────────────────────
   document.addEventListener("keydown", (e) => {
-    if (!e.altKey) return;
     const k = e.key.toLowerCase();
+    if (e.ctrlKey && !e.altKey && k === "n") { e.preventDefault(); nextStep(); return; }
+    if (!e.altKey) return;
     if (k === "s") { e.preventDefault(); runSolve(); }
     if (k === "p") { e.preventDefault(); takeSnapshot(); }
     if (k === "n") { e.preventDefault(); nextStep(); }
     if (k === "b") { e.preventDefault(); prevStep(); }
     if (k === "v") { e.preventDefault(); toggleVisible(); }
-    if (k === "h") { e.preventDefault(); toggleVisible(); }
+    if (k === "h") { e.preventDefault(); steps.length ? toggleSteps() : toggleVisible(); }
   });
 
 })();
