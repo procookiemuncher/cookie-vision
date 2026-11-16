@@ -416,6 +416,7 @@ Be precise.`;
       let els = null;
       try { els = pickBestGroup(strategy()); } catch (_) {}
       if (els) {
+        console.log("[ss] strategy", strategy.name, els.length, "options");
         return els.map((el, i) => ({
           el,
           letter: String.fromCharCode(65 + i),
@@ -459,8 +460,11 @@ Be precise.`;
   async function runChoiceSolve(choices, pageText) {
     const optionList = choices.map(c => `${c.letter}. ${c.text}`).join("\n");
     const raw = await solveWithWorker(`${pageText}\n\nOPTIONS:\n${optionList}`, mcqPrompt);
-    const letter = raw.match(/CHOICE:\s*\(?([A-Ha-h])/)?.[1]?.toUpperCase();
-    const picked = choices.find(c => c.letter === letter);
+    console.log("[ss] options", choices.map(c => c.letter + ": " + c.text), "reply", raw);
+    const letter = (raw.match(/CHOICE:\s*\(?([A-Ha-h])\b/) || raw.match(/ANSWER:\s*\(?([A-Ha-h])\b/))?.[1]?.toUpperCase();
+    const answerText = raw.match(/ANSWER:\s*(.+)/)?.[1]?.toLowerCase();
+    const picked = choices.find(c => c.letter === letter)
+      || (answerText && choices.find(c => c.text && answerText.includes(c.text.toLowerCase())));
     if (!picked) return false;
     markChoice(picked.el);
     visible = true;
@@ -473,11 +477,12 @@ Be precise.`;
   async function runSolve() {
     clearChoiceMarks();
     const choices = findChoiceGroup();
+    if (!choices) console.log("[ss] no multiple choice group found");
     if (choices) {
       try {
         const pageText = getPageText();
         if (await runChoiceSolve(choices, pageText)) return;
-      } catch (e) { /* fall through to the normal popup */ }
+      } catch (e) { console.log("[ss] mcq failed", e); }
     }
     root.style.setProperty("opacity", "1", "important");
     visible = true;
