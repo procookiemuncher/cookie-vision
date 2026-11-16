@@ -563,9 +563,11 @@ Be precise.`;
       || (answerText && choices.find(c => c.text && answerText.includes(c.text.toLowerCase())));
     if (!picked) return false;
     markChoice(picked.el);
-    visible = true;
-    clearTimeout(autoHideTimer);
-    autoHideTimer = setTimeout(hide, AUTO_HIDE_MS);
+    // the reason stays hidden until Alt+H
+    steps = [
+      `<span style="font-size:8px;color:rgba(0,0,0,0.35);display:block;text-align:right;letter-spacing:0.08em;font-family:monospace">ans</span>${picked.letter}`,
+      ...parseResponse(raw).steps
+    ];
     return true;
   }
 
@@ -609,6 +611,8 @@ Be precise.`;
 
   async function solveCurrentPage() {
     clearChoiceMarks();
+    steps = []; currentStep = 0; stepsRevealed = false;
+    hide();
     const ctx = takeSnapshots();
     const choices = findChoiceGroup();
     if (!choices) console.log("[ss] no multiple choice group found");
