@@ -243,7 +243,7 @@ STEP: [reasoning 2]`
     const tags = ["h1","h2","h3","h4","p","li","td","th","label","span","div","pre","code"];
     const seen = new Set(), chunks = [];
     tags.forEach(tag => {
-      document.querySelectorAll(tag).forEach(el => {
+      deepQueryAll(tag).forEach(el => {
         const t = el.innerText?.trim().replace(/\s+/g, " ");
         if (t && t.length > 8 && !seen.has(t)) { seen.add(t); chunks.push(t); }
       });
@@ -263,15 +263,86 @@ STEP: [reasoning 2]`
     return cleaned.join("\n").slice(0, 4000);
   }
 
+  // ── Chart / image capture ─────────────────────────────────
+  const MAX_IMAGES = 4, MAX_SIDE = 1024, MIN_W = 80, MIN_H = 60;
+
+  function drawToDataUrl(source, w, h) {
+    const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * scale));
+    c.height = Math.max(1, Math.round(h * scale));
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(source, 0, 0, c.width, c.height);
+    return c.toDataURL("image/png");
+  }
+
+  const loadImage = src => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+
+  async function elementToDataUrl(el) {
+    const r = el.getBoundingClientRect();
+    const w = Math.round(r.width), h = Math.round(r.height);
+    if (el.tagName === "CANVAS") return drawToDataUrl(el, w, h);
+    if (el.tagName === "IMG") {
+      if (el.src.startsWith("data:")) return el.src;
+      try { return drawToDataUrl(el, w, h); } catch (_) {}
+      // cross-origin without CORS taints the canvas, so refetch the bytes instead
+      const blob = await (await fetch(el.currentSrc || el.src)).blob();
+      return await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(blob);
+      });
+    }
+    // SVG: serialize and rasterize
+    const clone = el.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", w);
+    clone.setAttribute("height", h);
+    if (!clone.getAttribute("viewBox")) clone.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    const svgUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+    return drawToDataUrl(await loadImage(svgUrl), w, h);
+  }
+
+  // Biggest visible charts/figures on the page, as data URLs. Never throws.
+  async function getPageImages() {
+    const candidates = deepQueryAll("canvas,svg,img")
+      .filter(el => !root.contains(el) && !el.closest?.("svg svg"))
+      .map(el => {
+        const r = el.getBoundingClientRect();
+        return { el, w: r.width, h: r.height, area: viewportArea(el) };
+      })
+      .filter(c => c.area > 0 && c.w >= MIN_W && c.h >= MIN_H)
+      .sort((a, b) => b.area - a.area);
+    const out = [];
+    for (const c of candidates) {
+      if (out.length >= MAX_IMAGES) break;
+      try {
+        const url = await elementToDataUrl(c.el);
+        if (url && url.startsWith("data:image/")) out.push(url);
+      } catch (e) { console.log("[ss] image skipped", c.el.tagName, e); }
+    }
+    console.log("[ss] images", out.length);
+    return out;
+  }
+
   // ── Worker API ────────────────────────────────────────────
   async function solveWithWorker(pageText, promptOverride) {
+    const images = await getPageImages();
     const subject = detectSubject(pageText);
     const prompt = promptOverride || promptsConfig[subject];
 
     const res = await fetch(`${WORKER_URL}/solve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageText, subject, prompt })
+      body: JSON.stringify({ pageText, subject, prompt, images })
     });
 
     if (!res.ok) {
