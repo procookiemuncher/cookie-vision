@@ -3,7 +3,7 @@
 //  Paste into browser console OR save as a bookmarklet
 //
 //  CONTROLS:
-//  Alt+S → Solve current page
+//  Alt+S → Solve current page (multiple choice: dash next to the correct letter)
 //  Alt+N → Next step
 //  Alt+B → Back a step
 //  Alt+V → Toggle show/hide
@@ -196,11 +196,12 @@ STEP: [reasoning 2]`
   function hide() {
     visible = false;
     root.style.setProperty("opacity", "0", "important");
+    clearChoiceMarks();
   }
 
   function toggleVisible() { visible ? hide() : show(); }
 
-  function panicHide() {
+  function clearStepsAndHide() {
     steps = []; currentStep = 0;
     elStep.innerHTML = "";
     elCounter.textContent = "";
@@ -263,9 +264,9 @@ STEP: [reasoning 2]`
   }
 
   // ── Worker API ────────────────────────────────────────────
-  async function solveWithWorker(pageText) {
+  async function solveWithWorker(pageText, promptOverride) {
     const subject = detectSubject(pageText);
-    const prompt = promptsConfig[subject];
+    const prompt = promptOverride || promptsConfig[subject];
 
     const res = await fetch(`${WORKER_URL}/solve`, {
       method: "POST",
@@ -295,8 +296,189 @@ STEP: [reasoning 2]`
     return { answer, steps: parsedSteps };
   }
 
+  // ── Multiple choice (adaptive) ────────────────────────────
+  const mcqPrompt = `Find the multiple choice question and pick the single correct option from the OPTIONS list.
+CHOICE: [letter only]
+STEP: [one-line reason]
+Be precise.`;
+
+  // Walks open shadow roots and same-origin iframes
+  function deepQueryAll(selector, scope = document, out = []) {
+    scope.querySelectorAll(selector).forEach(el => out.push(el));
+    scope.querySelectorAll("*").forEach(el => {
+      if (el.shadowRoot) deepQueryAll(selector, el.shadowRoot, out);
+      if (el.tagName === "IFRAME") {
+        try { if (el.contentDocument) deepQueryAll(selector, el.contentDocument, out); } catch (_) {}
+      }
+    });
+    return out;
+  }
+
+  const cleanText = el => (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+
+  function viewportArea(el) {
+    const win = el.ownerDocument.defaultView;
+    if (!win) return 0;
+    const r = el.getBoundingClientRect();
+    const w = Math.min(r.right, win.innerWidth) - Math.max(r.left, 0);
+    const h = Math.min(r.bottom, win.innerHeight) - Math.max(r.top, 0);
+    if (w <= 0 || h <= 0) return 0;
+    const cs = win.getComputedStyle(el);
+    return cs.visibility === "hidden" || cs.display === "none" ? 0 : w * h;
+  }
+
+  // The clickable row that holds an input / role element
+  function optionElementFor(input, siblings) {
+    if (!(input instanceof HTMLInputElement)) return input;
+    const label = input.labels?.[0] || input.closest("label");
+    if (label) return label;
+    let el = input;
+    for (let i = 0; i < 4 && el.parentElement; i++) {
+      const p = el.parentElement;
+      if (siblings.filter(s => p.contains(s)).length > 1 || cleanText(p).length > 300) break;
+      el = p;
+    }
+    return el;
+  }
+
+  // Strategy 1: radio / checkbox inputs and ARIA roles
+  function groupsFromInputs() {
+    const inputs = deepQueryAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="option"],[role="checkbox"]');
+    const buckets = new Map();
+    for (const inp of inputs) {
+      const key = (inp.name && inp.ownerDocument.location + "#" + inp.name)
+        || inp.closest('[role="radiogroup"],[role="listbox"],[role="group"],fieldset')
+        || inp.parentElement?.parentElement;
+      if (!key) continue;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(inp);
+    }
+    const groups = [];
+    for (const members of buckets.values()) {
+      if (members.length < 2 || members.length > 10) continue;
+      const els = members.map(m => optionElementFor(m, members));
+      if (new Set(els).size !== els.length) continue;
+      groups.push(els);
+    }
+    return groups;
+  }
+
+  // Strategy 2: options that start with a letter (A. / (B) / C:)
+  function groupsFromLetters() {
+    const byLetter = {};
+    deepQueryAll("label,li,button,p,span,div").forEach(el => {
+      if (root.contains(el)) return;
+      const t = cleanText(el);
+      if (!t || t.length > 300) return;
+      const m = t.match(/^\(?([A-Ha-h])[.):]?(\s+\S|$)/);
+      if (!m) return;
+      const letter = m[1].toUpperCase();
+      const best = byLetter[letter];
+      if (!best || t.length < cleanText(best).length) byLetter[letter] = el;
+    });
+    const letters = Object.keys(byLetter).sort();
+    if (letters.length < 2 || letters[0] !== "A" || letters[1] !== "B") return [];
+    return [letters.map(l => byLetter[l])];
+  }
+
+  // Strategy 3: a short row of similar, clickable siblings
+  function groupsFromSiblings() {
+    const groups = [];
+    deepQueryAll("div,ul,ol,section,fieldset").forEach(parent => {
+      if (root.contains(parent)) return;
+      const kids = [...parent.children];
+      if (kids.length < 2 || kids.length > 8) return;
+      if (new Set(kids.map(k => k.tagName)).size !== 1) return;
+      const ok = kids.every(k => {
+        const t = cleanText(k);
+        return t.length > 0 && t.length < 200 && viewportArea(k) > 0
+          && (k.tagName === "BUTTON" || k.getAttribute("tabindex") !== null
+              || k.ownerDocument.defaultView.getComputedStyle(k).cursor === "pointer");
+      });
+      if (ok) groups.push(kids);
+    });
+    return groups;
+  }
+
+  function pickBestGroup(groups) {
+    let best = null, bestScore = 0;
+    for (const els of groups) {
+      const visible = els.filter(el => viewportArea(el) > 0).length;
+      if (visible < els.length) continue;
+      const score = els.reduce((sum, el) => sum + viewportArea(el), 0);
+      if (score > bestScore) { bestScore = score; best = els; }
+    }
+    return best;
+  }
+
+  function findChoiceGroup() {
+    for (const strategy of [groupsFromInputs, groupsFromLetters, groupsFromSiblings]) {
+      let els = null;
+      try { els = pickBestGroup(strategy()); } catch (_) {}
+      if (els) {
+        return els.map((el, i) => ({
+          el,
+          letter: String.fromCharCode(65 + i),
+          text: cleanText(el).replace(/^\(?[A-Ha-h][.):]\s*/, "")
+        }));
+      }
+    }
+    return null;
+  }
+
+  // The dash is an overlay on the top page; the site's own DOM is never touched
+  let markNode = null, markTimer = null;
+
+  function clearChoiceMarks() {
+    clearInterval(markTimer);
+    markNode?.remove();
+    markNode = null;
+  }
+
+  function placeMark(el) {
+    if (!el.isConnected) { clearChoiceMarks(); return; }
+    let { left, top, height } = el.getBoundingClientRect();
+    for (let win = el.ownerDocument.defaultView; win && win.frameElement; win = win.parent) {
+      const f = win.frameElement.getBoundingClientRect();
+      left += f.left; top += f.top;
+    }
+    markNode.style.left = `${Math.max(2, left - 14)}px`;
+    markNode.style.top = `${top + height / 2 - 10}px`;
+  }
+
+  function markChoice(el) {
+    clearChoiceMarks();
+    markNode = document.createElement("div");
+    markNode.textContent = "-";
+    markNode.style.cssText = "position:fixed!important;z-index:2147483647!important;font:bold 16px/20px monospace!important;color:rgba(0,0,0,0.55)!important;pointer-events:none!important;user-select:none!important;background:transparent!important;";
+    document.body.appendChild(markNode);
+    placeMark(el);
+    markTimer = setInterval(() => placeMark(el), 150);
+  }
+
+  async function runChoiceSolve(choices, pageText) {
+    const optionList = choices.map(c => `${c.letter}. ${c.text}`).join("\n");
+    const raw = await solveWithWorker(`${pageText}\n\nOPTIONS:\n${optionList}`, mcqPrompt);
+    const letter = raw.match(/CHOICE:\s*\(?([A-Ha-h])/)?.[1]?.toUpperCase();
+    const picked = choices.find(c => c.letter === letter);
+    if (!picked) return false;
+    markChoice(picked.el);
+    visible = true;
+    clearTimeout(autoHideTimer);
+    autoHideTimer = setTimeout(hide, AUTO_HIDE_MS);
+    return true;
+  }
+
   // ── Solve ─────────────────────────────────────────────────
   async function runSolve() {
+    clearChoiceMarks();
+    const choices = findChoiceGroup();
+    if (choices) {
+      try {
+        const pageText = getPageText();
+        if (await runChoiceSolve(choices, pageText)) return;
+      } catch (e) { /* fall through to the normal popup */ }
+    }
     root.style.setProperty("opacity", "1", "important");
     visible = true;
     elStep.style.color = "rgba(0,0,0,1)";
