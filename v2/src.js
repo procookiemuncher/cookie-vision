@@ -270,19 +270,27 @@ STEP: [reasoning 2]`
   const CHROME_SELECTOR = 'nav,header,footer,aside,[role="toolbar"],[role="navigation"],[role="banner"],[role="menu"],[role="menubar"],[role="contentinfo"],[class*="toolbar" i],[class*="navbar" i]';
 
   function getPageText() {
+    shownPass++;
     const tags = ["h1","h2","h3","h4","p","li","td","th","label","span","div","pre","code"];
-    const seen = new Set(), onscreen = [], offscreen = [];
-    tags.forEach(tag => {
-      deepQueryAll(tag).forEach(el => {
-        if (root.contains(el) || el.closest(CHROME_SELECTOR) || !el.getClientRects().length) return;
-        const t = el.innerText?.trim().replace(/\s+/g, " ");
-        if (!t || t.length <= 8 || seen.has(t)) return;
-        seen.add(t);
-        // what the tutor can see goes first so a long page can't push the question out
-        (viewportArea(el) > 0 ? onscreen : offscreen).push(t);
+    const collect = onlyShown => {
+      const seen = new Set(), onscreen = [], offscreen = [];
+      tags.forEach(tag => {
+        deepQueryAll(tag).forEach(el => {
+          if (root.contains(el) || el.closest(CHROME_SELECTOR) || !el.getClientRects().length) return;
+          if (onlyShown && !isShown(el)) return;
+          const t = el.innerText?.trim().replace(/\s+/g, " ");
+          if (!t || t.length <= 8 || seen.has(t)) return;
+          seen.add(t);
+          // what the tutor can see goes first so a long page can't push the question out
+          (viewportArea(el) > 0 ? onscreen : offscreen).push(t);
+        });
       });
-    });
-    const chunks = [...onscreen, ...offscreen];
+      return [...onscreen, ...offscreen];
+    };
+    // stacked questions: only what's actually on top. A page-wide invisible overlay would hide
+    // everything, so if that leaves almost nothing, take the unfiltered text instead.
+    let chunks = collect(true);
+    if (chunks.join("").length < 40) chunks = collect(false);
 
     const lines = chunks.join("\n").split("\n");
     const seenLines = new Set();
@@ -429,6 +437,55 @@ Be precise.`;
 
   const cleanText = el => (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
 
+  // ── Real visibility ───────────────────────────────────────
+  // Some sites stack every question on top of each other, so "inside the viewport" isn't enough:
+  // an element only counts if it isn't faded out / hidden and nothing unrelated is painted over it.
+  let shownPass = 0;
+  const shownCache = new WeakMap();
+
+  function styleShown(el) {
+    const win = el.ownerDocument.defaultView;
+    if (!win) return false;
+    const cs = win.getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse" || parseFloat(cs.opacity) < 0.05) return false;
+    const parent = el.parentElement || el.getRootNode?.().host;
+    return parent ? styleShown(parent) : true;
+  }
+
+  function topElementAt(el, x, y) {
+    let scope = el.getRootNode?.();
+    if (!scope || !scope.elementFromPoint) scope = el.ownerDocument;
+    let hit = scope.elementFromPoint(x, y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  }
+
+  function computeShown(el) {
+    const win = el.ownerDocument.defaultView;
+    if (!win || !styleShown(el)) return false;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x >= win.innerWidth || y >= win.innerHeight) return true; // can't hit-test off screen
+    let hit = null;
+    try { hit = topElementAt(el, x, y); } catch (_) {}
+    if (!hit) return true;
+    return hit === el || el.contains(hit) || hit.contains(el);
+  }
+
+  // cached per pass (a pass = one Alt+S / Alt+P / Alt+T press) so big pages stay fast
+  function isShown(el) {
+    const c = shownCache.get(el);
+    if (c && c.pass === shownPass) return c.v;
+    const v = computeShown(el);
+    shownCache.set(el, { pass: shownPass, v });
+    return v;
+  }
+
   function viewportArea(el) {
     const win = el.ownerDocument.defaultView;
     if (!win) return 0;
@@ -436,8 +493,7 @@ Be precise.`;
     const w = Math.min(r.right, win.innerWidth) - Math.max(r.left, 0);
     const h = Math.min(r.bottom, win.innerHeight) - Math.max(r.top, 0);
     if (w <= 0 || h <= 0) return 0;
-    const cs = win.getComputedStyle(el);
-    return cs.visibility === "hidden" || cs.display === "none" ? 0 : w * h;
+    return isShown(el) ? w * h : 0;
   }
 
   // The clickable row that holds an input / role element
@@ -482,7 +538,7 @@ Be precise.`;
     deepQueryAll("label,li,button,p,span,div").forEach(el => {
       if (root.contains(el)) return;
       const t = cleanText(el);
-      if (!t || t.length > 300) return;
+      if (!t || t.length > 300 || !isShown(el)) return;
       const m = t.match(/^\(?([A-Ha-h])[.):]?(\s+\S|$)/);
       if (!m) return;
       const letter = m[1].toUpperCase();
@@ -606,10 +662,7 @@ Be precise.`;
       const id = `${el.id} ${el.className} ${el.name || ""}`.toLowerCase();
       if (/search|filter/.test(id)) return false;
       // counts boxes scrolled off-screen too, otherwise the list depends on where the tutor is scrolled
-      const win = el.ownerDocument.defaultView, r = el.getBoundingClientRect();
-      if (!win || !r.width || !r.height) return false;
-      const cs = win.getComputedStyle(el);
-      return cs.visibility !== "hidden" && cs.display !== "none";
+      return isShown(el);
     });
   }
 
@@ -679,6 +732,7 @@ Be precise.`;
   }
 
   async function runTypeAnswer() {
+    shownPass++;
     if (!typeAnswer && !boxAnswers.size) { console.log("[ss] alt+t: no typed answer from the last solve"); return; }
     const box = findAnswerBox();
     if (!box) { console.log("[ss] alt+t: no fillable box found on the page"); return; }
@@ -744,6 +798,7 @@ Be precise.`;
 
   // ── Solve ─────────────────────────────────────────────────
   async function runSolve() {
+    shownPass++;
     setBusy(true);
     try { await solveCurrentPage(); } finally { setBusy(false); }
   }
