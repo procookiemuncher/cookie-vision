@@ -605,7 +605,11 @@ Be precise.`;
       if (root.contains(el) || el.disabled || el.readOnly) return false;
       const id = `${el.id} ${el.className} ${el.name || ""}`.toLowerCase();
       if (/search|filter/.test(id)) return false;
-      return viewportArea(el) > 0;
+      // counts boxes scrolled off-screen too, otherwise the list depends on where the tutor is scrolled
+      const win = el.ownerDocument.defaultView, r = el.getBoundingClientRect();
+      if (!win || !r.width || !r.height) return false;
+      const cs = win.getComputedStyle(el);
+      return cs.visibility !== "hidden" && cs.display !== "none";
     });
   }
 
