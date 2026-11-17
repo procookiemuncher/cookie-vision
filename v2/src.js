@@ -193,6 +193,7 @@ STEP: [reasoning 2]`
   // ── State ─────────────────────────────────────────────────
   let steps = [], currentStep = 0, stepsRevealed = false, visible = false, autoHideTimer = null;
   let typeAnswer = "";
+  let boxAnswers = new Map(); // answer box element -> what to type (pages with several fill-in boxes)
 
   // ── Visibility ────────────────────────────────────────────
   function show() {
@@ -214,7 +215,7 @@ STEP: [reasoning 2]`
   }
 
   function clearStepsAndHide() {
-    steps = []; currentStep = 0; stepsRevealed = false; typeAnswer = "";
+    steps = []; currentStep = 0; stepsRevealed = false; typeAnswer = ""; boxAnswers = new Map();
     elStep.innerHTML = "";
     elCounter.textContent = "";
     clearChoiceMarks();
@@ -368,7 +369,7 @@ STEP: [reasoning 2]`
     const res = await fetch(`${WORKER_URL}/solve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageText, subject, prompt, images, mode: promptOverride === mcqPrompt ? "choice" : "solve" })
+      body: JSON.stringify({ pageText, subject, prompt, images, mode: promptOverride === mcqPrompt ? "choice" : promptOverride === blanksPrompt ? "blanks" : "solve" })
     });
 
     if (!res.ok) {
@@ -405,6 +406,8 @@ STEP: [reasoning 2]`
     if (!type && answer) type = plainAnswer(answer);
     return { answer, type, steps: parsedSteps };
   }
+
+  const blanksPrompt = "blanks";
 
   // ── Multiple choice (adaptive) ────────────────────────────
   const mcqPrompt = `Find the multiple choice question and pick the single correct option from the OPTIONS list.
@@ -597,23 +600,41 @@ Be precise.`;
 
   // Closest visible, editable box to the center of the screen — that's whatever
   // question the student is currently looking at, not some stray search bar.
-  function findAnswerBox() {
-    const candidates = deepQueryAll(ANSWER_BOX_SELECTOR).filter(el => {
+  function findAnswerBoxes() {
+    return deepQueryAll(ANSWER_BOX_SELECTOR).filter(el => {
       if (root.contains(el) || el.disabled || el.readOnly) return false;
       const id = `${el.id} ${el.className} ${el.name || ""}`.toLowerCase();
       if (/search|filter/.test(id)) return false;
       return viewportArea(el) > 0;
     });
+  }
+
+  function distFromCenter(el) {
+    const win = el.ownerDocument.defaultView;
+    const r = el.getBoundingClientRect();
+    return Math.hypot(r.left + r.width / 2 - win.innerWidth / 2, r.top + r.height / 2 - win.innerHeight / 2);
+  }
+
+  // the box the tutor just clicked into wins, otherwise whatever is closest to the middle of the screen
+  function findAnswerBox() {
+    const candidates = findAnswerBoxes();
     if (!candidates.length) return null;
-    const win = candidates[0].ownerDocument.defaultView;
-    const cx = win.innerWidth / 2, cy = win.innerHeight / 2;
-    candidates.sort((a, b) => {
-      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-      const da = Math.hypot(ra.left + ra.width / 2 - cx, ra.top + ra.height / 2 - cy);
-      const db = Math.hypot(rb.left + rb.width / 2 - cx, rb.top + rb.height / 2 - cy);
-      return da - db;
-    });
-    return candidates[0];
+    const focused = candidates.find(el => el.ownerDocument.activeElement === el);
+    if (focused) return focused;
+    return candidates.sort((a, b) => distFromCenter(a) - distFromCenter(b))[0];
+  }
+
+  // Text of the question that belongs to this box: widen the container until it would swallow another box
+  function boxContext(el, boxes) {
+    let node = el.parentElement, best = "";
+    while (node && node !== node.ownerDocument.body) {
+      if (boxes.some(o => o !== el && node.contains(o))) break;
+      const t = cleanText(node);
+      if (t) best = t;
+      if (t.length > 250) break;
+      node = node.parentElement;
+    }
+    return best.slice(0, 250);
   }
 
   function setNativeValue(el, value) {
@@ -654,13 +675,35 @@ Be precise.`;
   }
 
   async function runTypeAnswer() {
-    if (!typeAnswer) { console.log("[ss] alt+t: no typed answer from the last solve"); return; }
+    if (!typeAnswer && !boxAnswers.size) { console.log("[ss] alt+t: no typed answer from the last solve"); return; }
     const box = findAnswerBox();
     if (!box) { console.log("[ss] alt+t: no fillable box found on the page"); return; }
-    console.log("[ss] alt+t: typing", JSON.stringify(typeAnswer), "into", box.tagName, box.type || "", box.id || box.className || "");
+    const text = boxAnswers.size ? boxAnswers.get(box) : typeAnswer;
+    if (!text) { console.log("[ss] alt+t: no answer for that box, click into the one you want or scroll it to the middle"); return; }
+    console.log("[ss] alt+t: typing", JSON.stringify(text), "into", box.tagName, box.type || "", box.id || box.className || "");
     setBusy(true);
-    try { await fillAnswerBox(box, typeAnswer); console.log("[ss] alt+t: box value is now", JSON.stringify(box.value ?? box.textContent)); }
+    try { await fillAnswerBox(box, text); console.log("[ss] alt+t: box value is now", JSON.stringify(box.value ?? box.textContent)); }
     finally { setBusy(false); }
+  }
+
+  // Page with several fill-in boxes (e.g. a list of Spanish questions): one request, one answer per box
+  async function runBlanksSolve(boxes, ctx) {
+    boxes = boxes.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return (ra.top - rb.top) || (ra.left - rb.left);
+    });
+    const list = boxes.map((el, i) => `BOX ${i + 1} (nearby text: ${boxContext(el, boxes) || "none"})`).join("\n");
+    const pageText = `${ctx.text}${getPageText()}\n\nFILL-IN BOXES (top to bottom):\n${list}`;
+    const raw = await solveWithWorker(pageText, blanksPrompt, ctx.images);
+    console.log("[ss] blanks reply:", JSON.stringify(raw.slice(0, 600)));
+    const answers = [];
+    for (const m of raw.matchAll(/^\s*BOX\s*(\d+)\s*[:.)-]\s*(.+)$/gim)) {
+      const i = +m[1] - 1, text = m[2].trim();
+      if (boxes[i] && text && !/^none$/i.test(text)) { boxAnswers.set(boxes[i], text); answers[i] = text; }
+    }
+    if (!boxAnswers.size) return false;
+    steps = boxes.map((_, i) => `${i + 1}. ${(answers[i] || "—").replace(/&/g, "&amp;").replace(/</g, "&lt;")}`);
+    return true;
   }
 
   // ── Snapshots (multi-part questions) ──────────────────────
@@ -703,9 +746,27 @@ Be precise.`;
 
   async function solveCurrentPage() {
     clearChoiceMarks();
-    steps = []; currentStep = 0; stepsRevealed = false; typeAnswer = "";
+    steps = []; currentStep = 0; stepsRevealed = false; typeAnswer = ""; boxAnswers = new Map();
     hide();
     const ctx = takeSnapshots();
+    const boxes = findAnswerBoxes();
+    if (boxes.length >= 2) {
+      console.log("[ss]", boxes.length, "answer boxes found, solving them one by one");
+      root.style.setProperty("opacity", "1", "important");
+      visible = true;
+      elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">solving…</span>`;
+      elCounter.textContent = "";
+      try {
+        if (await runBlanksSolve(boxes, ctx)) {
+          currentStep = 0;
+          stepsRevealed = true;
+          await renderStep();
+          clearTimeout(autoHideTimer);
+          autoHideTimer = setTimeout(hide, AUTO_HIDE_MS);
+          return;
+        }
+      } catch (e) { console.log("[ss] blanks failed", e); }
+    }
     const choices = findChoiceGroup();
     if (!choices) console.log("[ss] no multiple choice group found");
     if (choices) {
