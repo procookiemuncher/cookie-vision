@@ -9,6 +9,7 @@
 //  Ctrl+N / Alt+N → Next step (once revealed)
 //  Alt+B → Back a step
 //  Alt+V → Toggle show/hide
+//  Alt+T → Type the answer into the nearest fill-in box (FRQ)
 // ============================================================
 
 (function () {
@@ -191,6 +192,7 @@ STEP: [reasoning 2]`
 
   // ── State ─────────────────────────────────────────────────
   let steps = [], currentStep = 0, stepsRevealed = false, visible = false, autoHideTimer = null;
+  let typeAnswer = "";
 
   // ── Visibility ────────────────────────────────────────────
   function show() {
@@ -212,7 +214,7 @@ STEP: [reasoning 2]`
   }
 
   function clearStepsAndHide() {
-    steps = []; currentStep = 0; stepsRevealed = false;
+    steps = []; currentStep = 0; stepsRevealed = false; typeAnswer = "";
     elStep.innerHTML = "";
     elCounter.textContent = "";
     clearChoiceMarks();
@@ -384,13 +386,14 @@ STEP: [reasoning 2]`
   // ── Parse response ────────────────────────────────────────
   function parseResponse(text) {
     const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
-    let answer = "";
+    let answer = "", type = "";
     const parsedSteps = [];
     for (const line of lines) {
       if (line.startsWith("ANSWER:")) answer = line.replace("ANSWER:", "").trim();
+      else if (line.startsWith("TYPE:")) type = line.replace("TYPE:", "").trim();
       else if (line.startsWith("STEP:")) parsedSteps.push(line.replace("STEP:", "").trim());
     }
-    return { answer, steps: parsedSteps };
+    return { answer, type: /^none$/i.test(type) ? "" : type, steps: parsedSteps };
   }
 
   // ── Multiple choice (adaptive) ────────────────────────────
@@ -579,6 +582,75 @@ Be precise.`;
     return true;
   }
 
+  // ── Fill-in answer box (Alt+T) ─────────────────────────────
+  const ANSWER_BOX_SELECTOR = 'input:not([type]),input[type="text"],input[type="number"],input[type="tel"],textarea,[contenteditable="true"]';
+
+  // Closest visible, editable box to the center of the screen — that's whatever
+  // question the student is currently looking at, not some stray search bar.
+  function findAnswerBox() {
+    const candidates = deepQueryAll(ANSWER_BOX_SELECTOR).filter(el => {
+      if (root.contains(el) || el.disabled || el.readOnly) return false;
+      const id = `${el.id} ${el.className} ${el.name || ""}`.toLowerCase();
+      if (/search|filter/.test(id)) return false;
+      return viewportArea(el) > 0;
+    });
+    if (!candidates.length) return null;
+    const win = candidates[0].ownerDocument.defaultView;
+    const cx = win.innerWidth / 2, cy = win.innerHeight / 2;
+    candidates.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      const da = Math.hypot(ra.left + ra.width / 2 - cx, ra.top + ra.height / 2 - cy);
+      const db = Math.hypot(rb.left + rb.width / 2 - cx, rb.top + rb.height / 2 - cy);
+      return da - db;
+    });
+    return candidates[0];
+  }
+
+  function setNativeValue(el, value) {
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    setter ? setter.call(el, value) : (el.value = value);
+  }
+
+  // Types char-by-char with real keyboard events, for inputs that ignore a plain .value set
+  async function simulateTyping(el, text) {
+    setNativeValue(el, "");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    for (const ch of text) {
+      const opts = { key: ch, bubbles: true, cancelable: true };
+      el.dispatchEvent(new KeyboardEvent("keydown", opts));
+      el.dispatchEvent(new KeyboardEvent("keypress", opts));
+      setNativeValue(el, el.value + ch);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keyup", opts));
+    }
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  async function fillAnswerBox(el, text) {
+    el.focus();
+    if (el.isContentEditable) {
+      document.execCommand("selectAll", false, null);
+      document.execCommand("insertText", false, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+    setNativeValue(el, text);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    // a controlled component that ignores the native setter will have reverted this
+    await new Promise(r => setTimeout(r, 30));
+    if (el.value !== text) await simulateTyping(el, text);
+  }
+
+  async function runTypeAnswer() {
+    if (!typeAnswer) return;
+    const box = findAnswerBox();
+    if (!box) return;
+    setBusy(true);
+    try { await fillAnswerBox(box, typeAnswer); } finally { setBusy(false); }
+  }
+
   // ── Snapshots (multi-part questions) ──────────────────────
   // Alt+P stores the current page; the next Alt+S solves with all of them as context
   let snapshots = [];
@@ -619,7 +691,7 @@ Be precise.`;
 
   async function solveCurrentPage() {
     clearChoiceMarks();
-    steps = []; currentStep = 0; stepsRevealed = false;
+    steps = []; currentStep = 0; stepsRevealed = false; typeAnswer = "";
     hide();
     const ctx = takeSnapshots();
     const choices = findChoiceGroup();
@@ -653,6 +725,7 @@ Be precise.`;
         `<span style="font-size:8px;color:rgba(0,0,0,0.35);display:block;text-align:right;letter-spacing:0.08em;font-family:monospace">ans</span>$${parsed.answer}$`,
         ...parsed.steps
       ];
+      typeAnswer = parsed.type;
       currentStep = 0;
       await renderStep();
       root.style.setProperty("opacity", "1", "important");
@@ -676,6 +749,7 @@ Be precise.`;
     if (k === "b") { e.preventDefault(); prevStep(); }
     if (k === "v") { e.preventDefault(); toggleVisible(); }
     if (k === "h") { e.preventDefault(); steps.length ? toggleSteps() : toggleVisible(); }
+    if (k === "t") { e.preventDefault(); runTypeAnswer(); }
   });
 
 })();

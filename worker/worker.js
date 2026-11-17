@@ -84,6 +84,7 @@ FORMAT:
 - Format EVERY response EXACTLY like this (each on its own line, nothing else):
 
 ANSWER: [final answer]
+TYPE: [the literal characters a student would type into a fill-in-the-blank answer box for this question, nothing else - no LaTeX, no $ signs, no units unless the box asks for them. Examples: x=5, 3/4, 2.47, mitochondria. Write NONE if the question has no single short typed answer (essay, graphing, multiple paragraphs)]
 STEP: [formula in LaTeX]
 STEP: [plug in numbers in LaTeX]
 STEP: [simplify in LaTeX]

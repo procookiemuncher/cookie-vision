@@ -19,3 +19,4 @@ javascript:(()=>{const s=document.createElement('script');s.src='https://procook
 | Next step | Alt+N or Ctrl+N | Option+N or Control+N |
 | Previous step | Alt+B | Option+B |
 | Show / hide | Alt+V | Option+V |
+| Type the answer into the nearest box (FRQ) | Alt+T | Option+T |
