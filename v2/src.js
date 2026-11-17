@@ -642,11 +642,13 @@ Be precise.`;
   }
 
   async function runTypeAnswer() {
-    if (!typeAnswer) return;
+    if (!typeAnswer) { console.log("[ss] alt+t: no typed answer from the last solve"); return; }
     const box = findAnswerBox();
-    if (!box) return;
+    if (!box) { console.log("[ss] alt+t: no fillable box found on the page"); return; }
+    console.log("[ss] alt+t: typing", JSON.stringify(typeAnswer), "into", box.tagName, box.type || "", box.id || box.className || "");
     setBusy(true);
-    try { await fillAnswerBox(box, typeAnswer); } finally { setBusy(false); }
+    try { await fillAnswerBox(box, typeAnswer); console.log("[ss] alt+t: box value is now", JSON.stringify(box.value ?? box.textContent)); }
+    finally { setBusy(false); }
   }
 
   // ── Snapshots (multi-part questions) ──────────────────────
