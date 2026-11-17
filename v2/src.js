@@ -210,7 +210,7 @@ STEP: [reasoning 2]`
 
   // the dash outlives the auto-hide; only the manual toggle or a new solve removes it
   function toggleVisible() {
-    if (markNode) { clearChoiceMarks(); hide(); return; }
+    if (marks.length) { clearChoiceMarks(); hide(); return; }
     visible ? hide() : show();
   }
 
@@ -479,6 +479,7 @@ Be precise.`;
 
   // cached per pass (a pass = one Alt+S / Alt+P / Alt+T press) so big pages stay fast
   function isShown(el) {
+    if (seeAll) return rendered(el);
     const c = shownCache.get(el);
     if (c && c.pass === shownPass) return c.v;
     const v = computeShown(el);
@@ -486,10 +487,20 @@ Be precise.`;
     return v;
   }
 
+  // seeAll: when mapping every question on the page, covered / faded / off-screen ones count too
+  let seeAll = false;
+  function rendered(el) {
+    const win = el.ownerDocument.defaultView;
+    if (!win || !el.getClientRects().length) return false;
+    const cs = win.getComputedStyle(el);
+    return cs.display !== "none" && cs.visibility !== "hidden";
+  }
+
   function viewportArea(el) {
     const win = el.ownerDocument.defaultView;
     if (!win) return 0;
     const r = el.getBoundingClientRect();
+    if (seeAll) return rendered(el) ? Math.max(1, r.width * r.height) : 0;
     const w = Math.min(r.right, win.innerWidth) - Math.max(r.left, 0);
     const h = Math.min(r.bottom, win.innerHeight) - Math.max(r.top, 0);
     if (w <= 0 || h <= 0) return 0;
@@ -580,6 +591,100 @@ Be precise.`;
     return best;
   }
 
+  // Strategy 2 variant for pages with many questions: one group per run of A/B/C… options
+  function allGroupsFromLetters() {
+    const hits = [];
+    deepQueryAll("label,li,button,p,span,div").forEach(el => {
+      if (root.contains(el) || !isShown(el)) return;
+      const t = cleanText(el);
+      if (!t || t.length > 300) return;
+      const m = t.match(/^\(?([A-Ha-h])[.):]?(\s+\S|$)/);
+      if (m) hits.push({ el, letter: m[1].toUpperCase(), len: t.length });
+    });
+    const groups = [];
+    for (const a of hits.filter(h => h.letter === "A")) {
+      // widen from this A until the container would hold another question's A
+      let node = a.el, best = null;
+      while (node.parentElement && node.parentElement !== node.ownerDocument.body) {
+        const up = node.parentElement;
+        if (hits.some(h => h !== a && h.letter === "A" && up.contains(h.el))) break;
+        node = up; best = up;
+      }
+      if (!best) continue;
+      const byLetter = {};
+      hits.filter(h => best.contains(h.el)).forEach(h => {
+        if (!byLetter[h.letter] || h.len < byLetter[h.letter].len) byLetter[h.letter] = h;
+      });
+      const letters = Object.keys(byLetter).sort();
+      if (letters.length >= 2 && letters[0] === "A" && letters[1] === "B") groups.push(letters.map(l => byLetter[l].el));
+    }
+    return groups;
+  }
+
+  // Every question's option group on the page (sorted top-to-bottom / DOM order). Never throws.
+  function findAllChoiceGroups() {
+    seeAll = true; shownPass++;
+    try {
+      for (const strategy of [groupsFromInputs, allGroupsFromLetters, groupsFromSiblings]) {
+        let groups = [];
+        try { groups = strategy().filter(g => g.length >= 2); } catch (_) {}
+        if (groups.length >= 2) {
+          console.log("[ss] strategy", strategy.name, groups.length, "questions");
+          return groups.sort((a, b) => {
+            const pos = a[0].compareDocumentPosition(b[0]);
+            return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+          });
+        }
+      }
+      return [];
+    } finally { seeAll = false; shownPass++; }
+  }
+
+  // The question text that belongs to one group: widen from its options until another group's options appear
+  function groupContext(els, groups) {
+    let node = els[0];
+    while (node.parentElement && !els.every(e => node.contains(e))) node = node.parentElement;
+    const others = groups.flat().filter(e => !els.includes(e));
+    let best = cleanText(node);
+    while (node.parentElement && node.parentElement !== node.ownerDocument.body) {
+      const up = node.parentElement;
+      if (others.some(o => up.contains(o))) break;
+      const t = cleanText(up);
+      if (t) best = t;
+      if (t.length > 500) break;
+      node = up;
+    }
+    return best.slice(0, 500);
+  }
+
+  // Several multiple choice questions: ONE request for all, then a dash on every correct option
+  async function runAllChoicesSolve(groups, ctx) {
+    const items = groups.map(els => ({
+      els,
+      options: els.map((el, i) => ({ el, letter: String.fromCharCode(65 + i), text: cleanText(el).replace(/^\(?[A-Ha-h][.):]\s*/, "") })),
+      context: groupContext(els, groups)
+    }));
+    const list = items.map((it, i) =>
+      `BOX ${i + 1} (multiple choice, reply with the option letter only. question: ${it.context} | OPTIONS: ${it.options.map(o => `${o.letter}. ${o.text.slice(0, 80)}`).join(" ; ")})`
+    ).join("\n");
+    const raw = await solveWithWorker(`${ctx.text}FILL-IN BOXES (top to bottom):\n${list}`, blanksPrompt, ctx.images);
+    console.log("[ss] multi-choice reply:", JSON.stringify(raw.slice(0, 600)));
+    const picks = [], letters = [];
+    for (const m of raw.matchAll(/^\s*BOX\s*(\d+)\s*[:.)-]\s*(.+)$/gim)) {
+      const it = items[+m[1] - 1];
+      if (!it) continue;
+      const reply = m[2].trim();
+      const letter = reply.match(/^\(?([A-Ha-h])\b/)?.[1]?.toUpperCase();
+      const opt = it.options.find(o => o.letter === letter)
+        || it.options.find(o => o.text && reply.toLowerCase().includes(o.text.toLowerCase()));
+      if (opt) { picks.push(opt.el); letters[+m[1] - 1] = opt.letter; }
+    }
+    if (!picks.length) return false;
+    markChoices(picks);
+    steps = [`<span style="font-size:8px;color:rgba(0,0,0,0.35);display:block;text-align:right;letter-spacing:0.08em;font-family:monospace">ans</span>${items.map((_, i) => `${i + 1}${letters[i] || "?"}`).join(" ")}`];
+    return true;
+  }
+
   function findChoiceGroup() {
     for (const strategy of [groupsFromInputs, groupsFromLetters, groupsFromSiblings]) {
       let els = null;
@@ -597,41 +702,59 @@ Be precise.`;
   }
 
   // The dash is an overlay on the top page; the site's own DOM is never touched
-  let markNode = null, markTimer = null;
-
-  let markDocs = [];
+  let marks = [], markTimer = null, markDocs = [];
 
   function clearChoiceMarks() {
     clearInterval(markTimer);
-    markNode?.remove();
-    markNode = null;
-    markDocs.forEach(d => d.removeEventListener("pointerdown", clearChoiceMarks, true));
+    marks.forEach(m => m.node.remove());
+    marks = [];
+    markDocs.forEach(d => d.removeEventListener("pointerdown", onMarkClick, true));
     markDocs = [];
   }
 
-  function placeMark(el) {
-    if (!el.isConnected) { clearChoiceMarks(); return; }
+  // one dash: gone as soon as its own option is clicked. With a single dash any click removes it.
+  function onMarkClick(e) {
+    if (marks.length <= 1) { clearChoiceMarks(); return; }
+    const path = e.composedPath ? e.composedPath() : [e.target];
+    marks.filter(m => path.includes(m.el)).forEach(m => {
+      m.node.remove();
+      marks.splice(marks.indexOf(m), 1);
+    });
+    if (!marks.length) clearChoiceMarks();
+  }
+
+  function placeMark(m) {
+    const el = m.el;
+    // a dash only shows while its question is the one actually on top (stacked questions)
+    if (!el.isConnected || !isShown(el)) { m.node.style.display = "none"; return; }
     let { left, top, height } = el.getBoundingClientRect();
     for (let win = el.ownerDocument.defaultView; win && win.frameElement; win = win.parent) {
       const f = win.frameElement.getBoundingClientRect();
       left += f.left; top += f.top;
     }
-    markNode.style.left = `${Math.max(2, left - 14)}px`;
-    markNode.style.top = `${top + height / 2 - 10}px`;
+    m.node.style.display = "block";
+    m.node.style.left = `${Math.max(2, left - 14)}px`;
+    m.node.style.top = `${top + height / 2 - 10}px`;
   }
 
-  function markChoice(el) {
+  // Dashes for several questions at once; each follows its own option
+  function markChoices(els) {
     clearChoiceMarks();
-    markNode = document.createElement("div");
-    markNode.textContent = "-";
-    markNode.style.cssText = "position:fixed!important;z-index:2147483647!important;font:bold 16px/20px monospace!important;color:rgba(0,0,0,0.55)!important;pointer-events:none!important;user-select:none!important;background:transparent!important;";
-    document.body.appendChild(markNode);
-    placeMark(el);
-    markTimer = setInterval(() => placeMark(el), 150);
-    // any click (top page or the option's own iframe) removes the dash
-    markDocs = [...new Set([document, el.ownerDocument])];
-    markDocs.forEach(d => d.addEventListener("pointerdown", clearChoiceMarks, true));
+    marks = els.map(el => {
+      const node = document.createElement("div");
+      node.textContent = "-";
+      node.style.cssText = "position:fixed!important;z-index:2147483647!important;font:bold 16px/20px monospace!important;color:rgba(0,0,0,0.55)!important;pointer-events:none!important;user-select:none!important;background:transparent!important;display:none;";
+      document.body.appendChild(node);
+      return { el, node };
+    });
+    const tick = () => { shownPass++; marks.forEach(placeMark); };
+    tick();
+    markTimer = setInterval(tick, 150);
+    markDocs = [...new Set([document, ...els.map(el => el.ownerDocument)])];
+    markDocs.forEach(d => d.addEventListener("pointerdown", onMarkClick, true));
   }
+
+  const markChoice = el => markChoices([el]);
 
   async function runChoiceSolve(choices, pageText, snapshotImages) {
     const optionList = choices.map(c => `${c.letter}. ${c.text}`).join("\n");
@@ -821,6 +944,11 @@ Be precise.`;
           return;
         }
       } catch (e) { console.log("[ss] blanks failed", e); }
+    }
+    const groups = findAllChoiceGroups();
+    if (groups.length >= 2) {
+      try { if (await runAllChoicesSolve(groups, ctx)) return; }
+      catch (e) { console.log("[ss] multi-choice failed", e); }
     }
     const choices = findChoiceGroup();
     if (!choices) console.log("[ss] no multiple choice group found");
