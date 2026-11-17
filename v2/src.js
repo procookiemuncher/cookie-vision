@@ -382,6 +382,15 @@ STEP: [reasoning 2]`
   }
 
   // ── Parse response ────────────────────────────────────────
+  function plainAnswer(a) {
+    let t = a.replace(/\$/g, "")
+      .replace(/\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
+      .replace(/\\sqrt\{([^{}]*)\}/g, "sqrt($1)")
+      .replace(/\\(?:cdot|times)/g, "*").replace(/\\pi/g, "pi")
+      .replace(/\\[a-zA-Z]+/g, "").replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
+    return t.length > 60 ? "" : t;
+  }
+
   function parseResponse(text) {
     const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
     let answer = "", type = "";
@@ -391,7 +400,10 @@ STEP: [reasoning 2]`
       else if (line.startsWith("TYPE:")) type = line.replace("TYPE:", "").trim();
       else if (line.startsWith("STEP:")) parsedSteps.push(line.replace("STEP:", "").trim());
     }
-    return { answer, type: /^none$/i.test(type) ? "" : type, steps: parsedSteps };
+    type = /^none$/i.test(type) ? "" : type;
+    // model skipped TYPE: fall back to the answer with the latex stripped
+    if (!type && answer) type = plainAnswer(answer);
+    return { answer, type, steps: parsedSteps };
   }
 
   // ── Multiple choice (adaptive) ────────────────────────────
@@ -717,6 +729,7 @@ Be precise.`;
       }
       const raw = await solveWithWorker(pageText, undefined, ctx.images);
       const parsed = parseResponse(raw);
+      console.log("[ss] solve reply:", JSON.stringify(raw.slice(0, 300)), "-> type:", JSON.stringify(parsed.type));
       if (!parsed.answer && !parsed.steps.length) {
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no answer found</span>`;
         return;
