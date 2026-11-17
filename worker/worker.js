@@ -109,8 +109,21 @@ STEP: [one-line reason]
 PAGE TEXT:
 ${pageText}`;
 
+    // several fill-in boxes on one page (e.g. a list of vocab/translation questions)
+    const blanksPrompt = `You are an expert tutor. The page below has several fill-in answer boxes, listed at the end under FILL-IN BOXES with the text nearest each one. Work out the correct answer for EACH box.${imageParts.length ? " Attached images are part of the questions." : ""}
+Reply with exactly one line per box and nothing else:
+BOX 1: [exactly what the student should type]
+BOX 2: [exactly what the student should type]
+
+- Type only the answer itself: no explanation, no LaTeX, no $ signs, no quotes
+- For language questions answer in the target language with correct accents and spelling
+- Keep the same numbering as the list; if a box has no determinable answer write BOX n: NONE
+
+PAGE TEXT:
+${pageText}`;
+
     const isChoice = mode === "choice";
-    const fullPrompt = isChoice ? choicePrompt : solvePrompt;
+    const fullPrompt = isChoice ? choicePrompt : mode === "blanks" ? blanksPrompt : solvePrompt;
 
     try {
       const response = await fetch(
