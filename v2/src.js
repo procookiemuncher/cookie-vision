@@ -5,7 +5,7 @@
 //  CONTROLS:
 //  Alt+P → Snapshot this page as context (repeat for multi-part questions)
 //  Alt+S → Solve current page, plus any snapshots (multiple choice: dash next to the correct letter)
-//  Alt+H → Reveal the steps (again → back to just the answer)
+//  Alt+H → Reveal the steps (again → hide the widget)
 //  Ctrl+N / Alt+N → Next step (once revealed)
 //  Alt+B → Back a step
 //  Alt+V → Toggle show/hide
@@ -237,13 +237,11 @@ STEP: [reasoning 2]`
     autoHideTimer = setTimeout(hide, AUTO_HIDE_MS);
   }
 
-  // Alt+H: answer only -> steps; again -> back to the answer
+  // Alt+H: reveal the steps; press again to hide the whole widget (Alt+N steps forward from there)
   function toggleSteps() {
     if (!steps.length) return;
     if (stepsRevealed && visible) {
-      stepsRevealed = false;
-      currentStep = 0;
-      renderStep();
+      hide();
       return;
     }
     stepsRevealed = true;

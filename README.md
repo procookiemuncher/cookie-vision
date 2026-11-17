@@ -15,7 +15,7 @@ javascript:(()=>{const s=document.createElement('script');s.src='https://procook
 | --- | --- | --- |
 | Solve the page (plus any snapshots) | Alt+S | Option+S |
 | Snapshot the page for multi-part questions | Alt+P | Option+P |
-| Reveal steps / back to just the answer | Alt+H | Option+H |
+| Reveal steps / hide the widget | Alt+H | Option+H |
 | Next step | Alt+N or Ctrl+N | Option+N or Control+N |
 | Previous step | Alt+B | Option+B |
 | Show / hide | Alt+V | Option+V |
