@@ -756,10 +756,6 @@ Be precise.`;
     const boxes = findAnswerBoxes();
     if (boxes.length >= 2) {
       console.log("[ss]", boxes.length, "answer boxes found, solving them one by one");
-      root.style.setProperty("opacity", "1", "important");
-      visible = true;
-      elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">solving…</span>`;
-      elCounter.textContent = "";
       try {
         if (await runBlanksSolve(boxes, ctx)) {
           currentStep = 0;
@@ -779,10 +775,8 @@ Be precise.`;
         if (await runChoiceSolve(choices, pageText, ctx.images)) return;
       } catch (e) { console.log("[ss] mcq failed", e); }
     }
-    root.style.setProperty("opacity", "1", "important");
-    visible = true;
+    // stays hidden while solving; Alt+H reveals the answer
     elStep.style.color = "rgba(0,0,0,1)";
-    elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">solving…</span>`;
     elCounter.textContent = "";
     steps = []; currentStep = 0; stepsRevealed = false;
 
@@ -790,6 +784,7 @@ Be precise.`;
       const pageText = ctx.text + getPageText();
       if (!pageText || pageText.length < 20) {
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no text found</span>`;
+        show();
         return;
       }
       const raw = await solveWithWorker(pageText, undefined, ctx.images);
@@ -797,6 +792,7 @@ Be precise.`;
       console.log("[ss] solve reply:", JSON.stringify(raw.slice(0, 300)), "-> type:", JSON.stringify(parsed.type));
       if (!parsed.answer && !parsed.steps.length) {
         elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">no answer found</span>`;
+        show();
         return;
       }
       steps = [
@@ -812,6 +808,7 @@ Be precise.`;
     } catch (e) {
       elStep.innerHTML = `<span style="color:rgba(0,0,0,0.4);font-size:11px;font-family:monospace">err: ${e.message.slice(0, 40)}</span>`;
       elCounter.textContent = "";
+      show();
     }
   }
 
